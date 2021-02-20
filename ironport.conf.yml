@@ -1,0 +1,75 @@
+input {
+        syslog {
+        tags => "ironport"
+        port => 1514
+}
+}
+
+filter {
+   grok {
+     break_on_match => "false"
+     match => { "message" =>
+         [ "%{SYSLOGTIMESTAMP:log_timestamp}",
+           "MID %{NUMBER:mid}",
+           "ICID %{NUMBER:icid}",
+           "DCID %{NUMBER:dcid}",
+           "[Ss]ubject:? %{QUOTEDSTRING:subject}",
+           "[Ff]rom:? <%{EMAILADDRESS:from}>",
+           "[Tt]o:? <%{EMAILADDRESS:to}>",
+           "address %{IP:externalip}",
+           "reverse dns host %{HOSTNAME:reverse_dns_host}",
+           "ready %{INT:bytes}",
+           "attachment %{QUOTEDSTRING:attachment}"
+         ]
+ }
+}
+mutate {lowercase => ["from"]}
+mutate {lowercase => ["to"]}
+mutate {
+   remove_field => ["severity_label"]
+   remove_field => ["facility_label"]
+   remove_field => ["facility"]
+   remove_field => ["severity"]
+   remove_field => ["priority"]
+   }
+date{
+    match => [ "log_timestamp" , "EEE MMM dd HH:mm:ss yyyy"]
+    target => "@timestamp"
+}
+#Subject decode MIME
+if ([subject]) {
+ruby {
+    init => "require 'mail'"
+    code => "event.set('[subject_decode]',
+     Mail::Encodings.value_decode(event.get('[subject]')))"
+    }
+}
+dns {
+  reverse => ["host"]
+  action => "replace"
+  hit_cache_ttl => "90000"
+  hit_cache_size => "50"
+ }
+if ([externalip]){
+geoip {
+source => "externalip"
+  }
+}
+mutate {remove_field => ["log_timestamp","subject"]}
+
+mutate { gsub => ["subject_decode", "\\n", "" ] }
+mutate {gsub => ["subject_decode", "\\r " , "" ] }
+mutate {gsub => ["subject_decode", "'$", "" ] }
+mutate {gsub => ["subject_decode", "^'", "" ] }
+mutate {rename => ["subject_decode", "subject"]}
+}
+output {
+if "ironport" in [tags]{
+    elasticsearch {
+    hosts => ["http://localhost:9200"]
+    index => "ironport-%{+YYYY.MM.dd}"
+    user => "user"
+    password => "password"
+  }
+ }
+}
